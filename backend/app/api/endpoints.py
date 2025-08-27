@@ -9,6 +9,39 @@ router = APIRouter()
 class QueryRequest(BaseModel):
     query: str
 
+
+@router.get("/tables")
+async def get_available_tables():
+    """Mövcud cədvəllərin siyahısını qaytarır."""
+    try:
+        from app.db.database import get_db_connection
+        
+        conn = get_db_connection()
+        if not conn:
+            raise HTTPException(status_code=500, detail="Verilənlər bazası əlaqəsi yaradıla bilmədi")
+        
+        cursor = conn.cursor()
+        
+        cursor.execute("""
+            SELECT table_name 
+            FROM information_schema.tables 
+            WHERE table_schema = 'public' 
+            AND table_type = 'BASE TABLE'
+            ORDER BY table_name;
+        """)
+        
+        tables = cursor.fetchall()
+        table_names = [table[0] for table in tables]
+        
+        conn.close()
+        
+        return table_names
+        
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Cədvəllər alınarkən xəta: {str(e)}")
+
+
+
 @router.post("/query")
 async def process_query(request: QueryRequest):
     """Frontend-dən gələn sorğunu qəbul edir, SQL-ə çevirir və nəticəni qaytarır."""
@@ -37,3 +70,8 @@ async def process_query(request: QueryRequest):
         
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Gözlənilməyən xəta baş verdi: {str(e)}")
+    
+
+
+
+

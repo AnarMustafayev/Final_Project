@@ -12,23 +12,31 @@ import SqlQueryDisplay from './SqlQueryDisplay';
 import InputArea from './InputArea';
 import { VisualizationRenderer } from './visualizations/VisualizationRenderer';
 
-// Import hooks
+// Import hooks and context
 import { useDataAnalysis } from '../hooks/useDataAnalysis';
+import { useChat } from '../contexts/ChatContext';
 
 const API_BASE_URL = 'http://localhost:8000';
 
 const Dashboard = () => {
+  // Context
+  const {
+    activeChat,
+    activeChatDetail,
+    loading: chatLoading,
+    error: chatError,
+    processQuery,
+    hasMessages
+  } = useChat();
+
   // State management
   const [prompt, setPrompt] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
   const [results, setResults] = useState(null);
-  const [chatHistory, setChatHistory] = useState([]);
-  const [activeChat, setActiveChat] = useState(null);
   const [currentStep, setCurrentStep] = useState(0);
-  const [hasSubmitted, setHasSubmitted] = useState(false);
   const [availableTables, setAvailableTables] = useState([]);
-  const [currentQuery, setCurrentQuery] = useState(''); // Store current query for display
+  const [currentQuery, setCurrentQuery] = useState('');
   
   // Refs
   const textareaRef = useRef(null);
@@ -63,22 +71,22 @@ const Dashboard = () => {
   // Quick prompt suggestions
   const quickPrompts = [
     { 
-      text: "Bütün cədvələri göstər və strukturunu izah et", 
+      text: "Hər bir filial üzrə ümumi hesab balanslarını göstər.", 
       icon: Database, 
       category: "schema" 
     },
     { 
-      text: "Son 30 günün məlumatlarını analiz et", 
+      text: "Son 6 ay tranzaksiyalarının sayını göstərən qrafik yarat.", 
       icon: TrendingUp, 
       category: "trend" 
     },
     { 
-      text: "Ən yüksək dəyərli qeydləri tap", 
+      text: "Ən populyar kart növləri hansılardır?", 
       icon: Users, 
       category: "analysis" 
     },
     { 
-      text: "Məlumatların ümumi statistikasını ver", 
+      text: "Müştərilərin peşələrinə görə bölgüsünü göstər.", 
       icon: Calendar, 
       category: "summary" 
     }
@@ -96,6 +104,35 @@ const Dashboard = () => {
       textareaRef.current.style.height = textareaRef.current.scrollHeight + 'px';
     }
   }, [prompt]);
+
+  // Update results when active chat changes
+  useEffect(() => {
+    if (activeChatDetail?.messages) {
+      const lastMessage = activeChatDetail.messages[activeChatDetail.messages.length - 1];
+      if (lastMessage && lastMessage.visualizations?.length > 0) {
+        // Reconstruct results from last message
+        const lastViz = lastMessage.visualizations[0];
+        const reconstructedResults = {
+          generated_sql: lastMessage.generated_sql,
+          data: lastViz.data_json,
+          visualization_type: lastViz.visualization_type,
+          visualization_config: lastViz.chart_config,
+          statistics: analyzeAndProcessData({
+            data: lastViz.data_json,
+            generated_sql: lastMessage.generated_sql
+          }).statistics
+        };
+        setResults(reconstructedResults);
+        setCurrentQuery(lastMessage.message_text);
+      } else {
+        setResults(null);
+        setCurrentQuery('');
+      }
+    } else {
+      setResults(null);
+      setCurrentQuery('');
+    }
+  }, [activeChatDetail, analyzeAndProcessData]);
 
   // Fetch available tables from API
   const fetchAvailableTables = async () => {
@@ -120,18 +157,7 @@ const Dashboard = () => {
     setError(null);
     setResults(null);
     setCurrentStep(0);
-    setHasSubmitted(true);
-    setCurrentQuery(userQuery); // Store the query for display
-
-    const newChat = {
-      id: Date.now(),
-      query: userQuery,
-      timestamp: new Date(),
-      results: null
-    };
-
-    setChatHistory(prev => [newChat, ...prev]);
-    setActiveChat(newChat);
+    setCurrentQuery(userQuery);
 
     // Clear the prompt immediately after starting submission
     setPrompt('');
@@ -147,23 +173,9 @@ const Dashboard = () => {
 
       // Step 3: Data Extraction
       setCurrentStep(2);
-      const response = await fetch(`${API_BASE_URL}/api/query`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({ 
-          query: userQuery,
-          analyze_structure: true // Request structure analysis for smart visualization
-        })
-      });
-
-      if (!response.ok) {
-        const errorData = await response.json();
-        throw new Error(errorData.detail || 'Sorğu zamanı xəta baş verdi');
-      }
-
-      const data = await response.json();
+      
+      // Use the context's processQuery method which handles chat persistence
+      const data = await processQuery(userQuery);
 
       // Step 4: Smart Visualization
       setCurrentStep(3);
@@ -174,15 +186,6 @@ const Dashboard = () => {
       
       setCurrentStep(4);
       setResults(processedResults);
-
-      // Update chat history with results
-      setChatHistory(prev => 
-        prev.map(chat => 
-          chat.id === newChat.id 
-            ? { ...chat, results: processedResults }
-            : chat
-        )
-      );
       
     } catch (err) {
       setError(err.message);
@@ -210,40 +213,17 @@ const Dashboard = () => {
     }, 0);
   };
 
-  // Handle chat selection
-  const handleSelectChat = (chat) => {
-    setActiveChat(chat);
-    setPrompt(chat.query);
-    setCurrentQuery(chat.query);
-    if (chat.results) {
-      setResults(chat.results);
-      setHasSubmitted(true);
-    }
-    setError(null);
-  };
-
-  // Clear chat history
-  const handleClearHistory = () => {
-    setChatHistory([]);
-    setActiveChat(null);
-    setResults(null);
-    setError(null);
-    setHasSubmitted(false);
-    setPrompt('');
-    setCurrentQuery('');
-  };
+  // Determine if we should show welcome section
+  const shouldShowWelcome = !hasMessages() && !results && !loading && !currentQuery;
+  
+  // Get current error (prioritize local error over chat error)
+  const currentError = error || chatError;
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-slate-50 to-slate-100">
       <div className="flex h-screen overflow-hidden">
         {/* Sidebar */}
-        <Sidebar
-          chatHistory={chatHistory}
-          activeChat={activeChat}
-          onClearHistory={handleClearHistory}
-          onSelectChat={handleSelectChat}
-          availableTables={availableTables}
-        />
+        <Sidebar availableTables={availableTables} />
 
         {/* Main Content */}
         <div className="flex-1 flex flex-col min-w-0 overflow-hidden">
@@ -254,10 +234,10 @@ const Dashboard = () => {
           <div className="flex-1 overflow-y-auto bg-slate-50">
             <div className="p-6">
               {/* Error Display */}
-              <ErrorDisplay error={error} />
+              <ErrorDisplay error={currentError} />
 
               {/* Processing Loader */}
-              {loading && (
+              {(loading || chatLoading) && (
                 <ProcessingLoader 
                   currentStep={currentStep} 
                   processSteps={processSteps} 
@@ -265,14 +245,31 @@ const Dashboard = () => {
               )}
 
               {/* Welcome Section or Results */}
-              {!hasSubmitted ? (
+              {shouldShowWelcome ? (
                 <WelcomeSection 
                   quickPrompts={quickPrompts} 
                   onPromptClick={handlePromptClick} 
                 />
               ) : (
                 <div className="space-y-6">
-                  {/* User Query Display */}
+                  {/* Active Chat Info */}
+                  {activeChat && (
+                    <div className="bg-blue-50 border border-blue-200 rounded-xl p-4">
+                      <div className="flex items-center justify-between">
+                        <div>
+                          <h3 className="text-blue-900 font-semibold">{activeChat.title}</h3>
+                          <p className="text-blue-700 text-sm">
+                            {activeChatDetail?.messages?.length || 0} mesaj
+                          </p>
+                        </div>
+                        <div className="text-xs text-blue-600">
+                          {new Date(activeChat.updated_at).toLocaleString('az-AZ')}
+                        </div>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Current Query Display */}
                   {currentQuery && (
                     <div className="bg-blue-50 border border-blue-200 rounded-xl p-4">
                       <div className="flex items-start gap-3">
@@ -280,14 +277,52 @@ const Dashboard = () => {
                           <User className="h-4 w-4 text-white" />
                         </div>
                         <div className="flex-1">
-                          <p className="text-blue-900 font-medium mb-1">Sizin sorğunuz:</p>
+                          <p className="text-blue-900 font-medium mb-1">
+                            {activeChat ? 'Son sorğunuz:' : 'Sizin sorğunuz:'}
+                          </p>
                           <p className="text-blue-800">{currentQuery}</p>
                         </div>
                       </div>
                     </div>
                   )}
 
-                  {results && !loading ? (
+                  {/* Chat Messages History */}
+                  {activeChatDetail?.messages && activeChatDetail.messages.length > 1 && (
+                    <div className="space-y-4">
+                      <h3 className="text-lg font-semibold text-gray-800">Chat Tarixçəsi:</h3>
+                      {activeChatDetail.messages.slice(0, -1).map((message, index) => (
+                        <div key={message.message_id} className="bg-gray-50 border rounded-xl p-4">
+                          <div className="flex items-start gap-3 mb-3">
+                            <div className="bg-gray-600 rounded-full p-2 flex-shrink-0">
+                              <User className="h-4 w-4 text-white" />
+                            </div>
+                            <div className="flex-1">
+                              <p className="text-gray-700">{message.message_text}</p>
+                              <p className="text-xs text-gray-500 mt-1">
+                                {new Date(message.created_at).toLocaleString('az-AZ')}
+                              </p>
+                            </div>
+                          </div>
+                          
+                          {message.generated_sql && (
+                            <SqlQueryDisplay sql={message.generated_sql} />
+                          )}
+                          
+                          {message.visualizations?.length > 0 && (
+                            <div className="mt-4">
+                              {/* Here you could render the saved visualization */}
+                              <p className="text-sm text-gray-600">
+                                Vizualizasiya: {message.visualizations[0].visualization_type}
+                              </p>
+                            </div>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  )}
+
+                  {/* Current Results */}
+                  {results && !loading && !chatLoading ? (
                     <>
                       {/* SQL Query Display */}
                       <SqlQueryDisplay sql={results.generated_sql} />
@@ -310,7 +345,7 @@ const Dashboard = () => {
             onPromptChange={setPrompt}
             onKeyPress={handleKeyPress}
             onSubmit={handleSubmit}
-            loading={loading}
+            loading={loading || chatLoading}
             textareaRef={textareaRef}
           />
         </div>

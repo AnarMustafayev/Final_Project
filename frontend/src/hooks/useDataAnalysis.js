@@ -1,6 +1,62 @@
+// src/hooks/useDataAnalysis.js
+import { useState, useEffect } from 'react';
+import { useChat } from '../contexts/ChatContext';
+
 export const useDataAnalysis = () => {
+  const [isConnected, setIsConnected] = useState(false);
+  const [availableTables, setAvailableTables] = useState([]);
+  const [query, setQuery] = useState('');
+  const [isLoading, setIsLoading] = useState(false);
+  const [result, setResult] = useState(null);
+  const [error, setError] = useState(null);
+  
+  // Get chat functions from our new context - with safe defaults
+  const { 
+    chats = [],
+    activeChat = null,
+    activeChatDetail = null,
+    loading: chatLoading = false,
+    processQuery: contextProcessQuery
+  } = useChat() || {};
+
+  // Check database connection and get tables
+  useEffect(() => {
+    checkConnection();
+  }, []);
+
+  const checkConnection = async () => {
+    try {
+      // Try to fetch tables from your API
+      const response = await fetch('http://localhost:8000/api/tables');
+      if (response.ok) {
+        const tables = await response.json();
+        setAvailableTables(tables || []);
+        setIsConnected(tables && tables.length > 0);
+      } else {
+        setIsConnected(false);
+      }
+    } catch (err) {
+      setIsConnected(false);
+      console.error('Database connection failed:', err);
+    }
+  };
+
   const analyzeAndProcessData = (apiData) => {
-    const { data, generated_sql, column_info, row_count } = apiData;
+    if (!apiData || !apiData.data) {
+      return {
+        type: 'empty',
+        data: [],
+        generated_sql: apiData?.generated_sql || '',
+        message: 'Sorğunuz nəticə qaytarmadı',
+        statistics: {
+          totalRows: 0,
+          totalColumns: 0,
+          dataTypes: {}
+        }
+      };
+    }
+
+    const { data, generated_sql } = apiData;
     
     if (!data || data.length === 0) {
       return {
@@ -8,13 +64,16 @@ export const useDataAnalysis = () => {
         data: [],
         generated_sql,
         message: 'Sorğunuz nəticə qaytarmadı',
-        column_info,
-        row_count: 0
+        statistics: {
+          totalRows: 0,
+          totalColumns: 0,
+          dataTypes: {}
+        }
       };
     }
 
     // Analyze column types and data patterns
-    const columns = Object.keys(data[0]);
+    const columns = Object.keys(data[0] || {});
     const numericColumns = [];
     const dateColumns = [];
     const textColumns = [];
@@ -90,6 +149,7 @@ export const useDataAnalysis = () => {
       data: chartData,
       originalData: data,
       generated_sql,
+      visualization_type: visualizationType,
       column_info: {
         numeric: numericColumns,
         date: dateColumns,
@@ -97,7 +157,7 @@ export const useDataAnalysis = () => {
         category: categoryColumns,
         total: columns.length
       },
-      row_count,
+      row_count: data.length,
       statistics,
       primaryNumericColumn: numericColumns[0],
       primaryCategoryColumn: categoryColumns[0],
@@ -108,6 +168,8 @@ export const useDataAnalysis = () => {
   const calculateStatistics = (data, numericColumns, categoryColumns) => {
     const stats = {
       totalRows: data.length,
+      totalColumns: Object.keys(data[0] || {}).length,
+      dataTypes: {},
       numericStats: {},
       categoryStats: {}
     };
@@ -123,6 +185,7 @@ export const useDataAnalysis = () => {
           max: Math.max(...values),
           count: values.length
         };
+        stats.dataTypes[col] = 'numeric';
       }
     });
 
@@ -140,10 +203,94 @@ export const useDataAnalysis = () => {
           .slice(0, 5)
           .map(([value, count]) => ({ value, count }))
       };
+      stats.dataTypes[col] = 'categorical';
     });
 
     return stats;
   };
 
-  return { analyzeAndProcessData };
+  const processQuery = async (userQuery = query) => {
+    if (!userQuery.trim()) return;
+
+    setIsLoading(true);
+    setError(null);
+    
+    try {
+      // Use the new chat context to process query
+      if (contextProcessQuery) {
+        const response = await contextProcessQuery(userQuery);
+        
+        // Process the data using your existing analysis logic
+        const processedResult = analyzeAndProcessData({
+          data: response.data,
+          generated_sql: response.generated_sql,
+          row_count: response.data ? response.data.length : 0
+        });
+        
+        // Set the result for your existing Dashboard component
+        setResult(processedResult);
+        
+        // Clear the query input
+        setQuery('');
+      }
+      
+    } catch (err) {
+      setError(err.message || 'Sorğu işlənərkən xəta baş verdi');
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  const clearError = () => {
+    setError(null);
+  };
+
+  // Legacy functions for backward compatibility
+  const clearHistory = () => {
+    console.log('clearHistory called - handled by ChatContext');
+  };
+
+  // Convert new chat format to legacy format for existing components - with safe checks
+  const chatHistory = Array.isArray(chats) ? chats.map(chat => ({
+    id: chat.chat_id,
+    query: chat.title,
+    timestamp: new Date(chat.updated_at),
+    results: chat.message_count > 0
+  })) : [];
+  
+  // Active chat in legacy format - with safe check
+  const activeChatLegacy = activeChat ? {
+    id: activeChat.chat_id,
+    query: activeChat.title,
+    timestamp: new Date(activeChat.updated_at),
+    results: activeChatDetail?.messages?.length > 0
+  } : null;
+
+  const setActiveChat = (chat) => {
+    console.log('setActiveChat called - handled by ChatContext');
+  };
+
+  return {
+    // Database connection
+    isConnected,
+    availableTables,
+    
+    // Query processing
+    query,
+    setQuery,
+    isLoading: isLoading || chatLoading,
+    result,
+    error,
+    processQuery,
+    clearError,
+    
+    // Data analysis functions
+    analyzeAndProcessData,
+    
+    // Legacy chat support (for backward compatibility)
+    chatHistory,
+    activeChat: activeChatLegacy,
+    setActiveChat,
+    clearHistory
+  };
 };

@@ -1,47 +1,86 @@
-import sqlite3
+import psycopg2
 import pandas as pd
 import os
+from sqlalchemy import create_engine
+from urllib.parse import quote_plus
 
-# Get the absolute path to the database
-BASE_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-DB_PATH = os.path.join(BASE_DIR, "backend", "app", "db", "sales.db")
+# PostgreSQL connection parameters
+DB_CONFIG = {
+    'host': 'localhost',  # or your PostgreSQL server host
+    'port': '5432',       # default PostgreSQL port
+    'database': 'retail banking',
+    'user': 'postgres',
+    'password': '**'
+}
 
-# Alternative path if the above doesn't work
-if not os.path.exists(DB_PATH):
-    # Try relative path from current file location
-    current_dir = os.path.dirname(os.path.abspath(__file__))
-    DB_PATH = os.path.join(current_dir, "sales.db")
+
+def get_db_connection():
+    """PostgreSQL verilənlər bazasına əlaqə yaradır."""
+    try:
+        conn = psycopg2.connect(
+            host=DB_CONFIG['host'],
+            port=DB_CONFIG['port'],
+            database=DB_CONFIG['database'],
+            user=DB_CONFIG['user'],
+            password=DB_CONFIG['password']
+        )
+        return conn
+    except Exception as e:
+        print(f"Database connection error: {e}")
+        return None
+
+def get_sqlalchemy_engine():
+    """SQLAlchemy engine yaradır (pandas üçün)."""
+    try:
+        # Password-də xüsusi simvollar varsa, onları encode edirik
+        password = quote_plus(DB_CONFIG['password'])
+        
+        connection_string = f"postgresql://{DB_CONFIG['user']}:{password}@{DB_CONFIG['host']}:{DB_CONFIG['port']}/{DB_CONFIG['database']}"
+        engine = create_engine(connection_string)
+        return engine
+    except Exception as e:
+        print(f"SQLAlchemy engine creation error: {e}")
+        return None
 
 def get_db_schema():
-    """Verilənlər bazasının sxemini CREATE TABLE formatında qaytarır."""
+    """PostgreSQL verilənlər bazasının sxemini qaytarır."""
     schema = ""
     try:
-        print(f"Trying to connect to database at: {DB_PATH}")
-        
-        # Check if database file exists
-        if not os.path.exists(DB_PATH):
-            print(f"Database file not found at: {DB_PATH}")
-            # Try to create the database
-            create_database_if_not_exists()
+        conn = get_db_connection()
+        if not conn:
+            return None
             
-        conn = sqlite3.connect(DB_PATH)
         cursor = conn.cursor()
         
-        # Bütün cədvəllərin adlarını alırıq
-        cursor.execute("SELECT name FROM sqlite_master WHERE type='table';")
+        # PostgreSQL-də cədvəllərin siyahısını alırıq
+        cursor.execute("""
+            SELECT table_name 
+            FROM information_schema.tables 
+            WHERE table_schema = 'public' 
+            AND table_type = 'BASE TABLE';
+        """)
         tables = cursor.fetchall()
         
         if not tables:
             print("No tables found in database")
             conn.close()
             return None
-            
-        # Hər cədvəlin quruluşunu alırıq
+        
+        # Hər cədvəlin strukturunu alırıq
         for table_name in tables:
-            cursor.execute(f"SELECT sql FROM sqlite_master WHERE name='{table_name[0]}'")
-            result = cursor.fetchone()
-            if result:
-                schema += result[0] + ";\n"
+            cursor.execute(f"""
+                SELECT column_name, data_type, is_nullable, column_default
+                FROM information_schema.columns
+                WHERE table_name = '{table_name[0]}'
+                ORDER BY ordinal_position;
+            """)
+            columns = cursor.fetchall()
+            
+            schema += f"\nTable: {table_name[0]}\n"
+            schema += "-" * 50 + "\n"
+            for col in columns:
+                schema += f"  {col[0]} | {col[1]} | Nullable: {col[2]} | Default: {col[3]}\n"
+            schema += "\n"
                 
         conn.close()
         print(f"Schema retrieved successfully: {len(tables)} tables found")
@@ -49,8 +88,6 @@ def get_db_schema():
         
     except Exception as e:
         print(f"Sxem alınarkən xəta baş verdi: {e}")
-        print(f"Database path: {DB_PATH}")
-        print(f"Database exists: {os.path.exists(DB_PATH)}")
         return None
 
 def execute_sql_query(sql_query):
@@ -58,13 +95,12 @@ def execute_sql_query(sql_query):
     try:
         print(f"Executing SQL: {sql_query}")
         
-        # Check if database file exists
-        if not os.path.exists(DB_PATH):
-            return {"error": f"Database file not found at: {DB_PATH}"}
-            
-        conn = sqlite3.connect(DB_PATH)
-        df = pd.read_sql_query(sql_query, conn)
-        conn.close()
+        # SQLAlchemy engine ilə pandas istifadə edirik
+        engine = get_sqlalchemy_engine()
+        if not engine:
+            return {"error": "Database engine creation failed"}
+        
+        df = pd.read_sql_query(sql_query, engine)
         
         # Pandas DataFrame-i JSON-a çeviririk
         result = df.to_dict(orient='records')
@@ -76,85 +112,66 @@ def execute_sql_query(sql_query):
         print(error_msg)
         return {"error": error_msg}
 
-def create_database_if_not_exists():
-    """Creates the database with sample data if it doesn't exist."""
+def execute_sql_query_with_psycopg2(sql_query):
+    """Alternativ: Yalnız psycopg2 istifadə edərək SQL sorğusu icra edir."""
     try:
-        print(f"Creating database at: {DB_PATH}")
+        print(f"Executing SQL with psycopg2: {sql_query}")
         
-        # Create directory if it doesn't exist
-        os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
+        conn = get_db_connection()
+        if not conn:
+            return {"error": "Database connection failed"}
         
-        conn = sqlite3.connect(DB_PATH)
         cursor = conn.cursor()
-
-        cursor.execute('''
-        CREATE TABLE IF NOT EXISTS filiallar (
-            id INTEGER PRIMARY KEY,
-            filial_adi TEXT NOT NULL,
-            seher TEXT
-        )
-        ''')
-
-        cursor.execute('''
-        CREATE TABLE IF NOT EXISTS satislar (
-            id INTEGER PRIMARY KEY,
-            filial_id INTEGER REFERENCES filiallar(id),
-            satis_miqdari REAL NOT NULL,
-            satis_tarixi DATE NOT NULL
-        )
-        ''')
-
-        # Məlumatların mövcudluğunu yoxlayırıq
-        cursor.execute("SELECT COUNT(*) FROM filiallar")
-        if cursor.fetchone()[0] == 0:
-            filiallar_data = [
-                (1, 'Mərkəz Filialı', 'Bakı'),
-                (2, 'Gənclik Filialı', 'Bakı'),
-                (3, 'Sumqayıt Filialı', 'Sumqayıt'),
-                (4, 'Gəncə Filialı', 'Gəncə')
-            ]
-            cursor.executemany('INSERT INTO filiallar VALUES (?, ?, ?)', filiallar_data)
-            print("Filial data inserted")
-
-        cursor.execute("SELECT COUNT(*) FROM satislar")
-        if cursor.fetchone()[0] == 0:
-            satislar_data = [
-                (1, 1, 1200.50, '2025-04-15'), (2, 2, 2500.00, '2025-04-18'),
-                (3, 3, 950.75, '2025-05-02'), (4, 1, 1800.00, '2025-05-10'),
-                (5, 4, 1500.25, '2025-05-12'), (6, 2, 3100.00, '2025-06-01'),
-                (7, 3, 1100.00, '2025-06-05'), (8, 1, 2200.50, '2025-06-20')
-            ]
-            cursor.executemany('INSERT INTO satislar VALUES (?, ?, ?, ?)', satislar_data)
-            print("Sales data inserted")
-
-        conn.commit()
+        cursor.execute(sql_query)
+        
+        # Sütun adlarını alırıq
+        column_names = [desc[0] for desc in cursor.description]
+        
+        # Məlumatları alırıq
+        rows = cursor.fetchall()
+        
+        # Dictionary formatına çeviririk
+        result = []
+        for row in rows:
+            result.append(dict(zip(column_names, row)))
+        
         conn.close()
-        print(f"Database created successfully at: {DB_PATH}")
+        print(f"Query executed successfully, returned {len(result)} rows")
+        return result
         
     except Exception as e:
-        print(f"Error creating database: {e}")
+        error_msg = f"SQL icrası zamanı xəta: {str(e)}"
+        print(error_msg)
+        return {"error": error_msg}
 
-# Test function
-def test_database():
-    """Test database connection and show some data."""
+# Test funksiyası
+def test_connection():
+    """Verilənlər bazasına əlaqəni test edir."""
     try:
+        conn = get_db_connection()
+        if conn:
+            print("PostgreSQL connection successful!")
+            cursor = conn.cursor()
+            cursor.execute("SELECT version();")
+            version = cursor.fetchone()
+            print(f"PostgreSQL version: {version[0]}")
+            conn.close()
+            return True
+        else:
+            print("PostgreSQL connection failed!")
+            return False
+    except Exception as e:
+        print(f"Connection test error: {e}")
+        return False
+
+# Usage example
+if __name__ == "__main__":
+    # Test connection
+    if test_connection():
+        # Get database schema
         schema = get_db_schema()
         if schema:
-            print("✅ Database schema retrieved successfully")
-            print("Schema preview:", schema[:200] + "...")
-        else:
-            print("❌ Failed to get database schema")
-            
-        # Test a simple query
-        result = execute_sql_query("SELECT * FROM filiallar LIMIT 3")
-        if isinstance(result, list):
-            print("✅ Query executed successfully")
-            print("Sample data:", result)
-        else:
-            print("❌ Query failed:", result)
-            
-    except Exception as e:
-        print(f"Test failed: {e}")
-
-if __name__ == "__main__":
-    test_database()
+            print("Database Schema:")
+            print(schema)
+        
+        

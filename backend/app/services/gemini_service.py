@@ -14,7 +14,7 @@ model = genai.GenerativeModel('gemini-2.5-flash')
 def convert_natural_language_to_sql(natural_language_query, db_schema):
     """Təbii dil sorğusunu SQL-ə çevirir."""
     prompt = f"""
-    Sən Azərbaycan dilində yazılmış təbii dil sorğularını SQLite SQL koduna çevirən peşəkar bir köməkçisən.
+    Sən Azərbaycan dilində yazılmış təbii dil sorğularını PostgreSQL koduna çevirən peşəkar bir köməkçisən.
     Sənin vəzifən YALNIZ SQL kodunu qaytarmaqdır, heç bir əlavə izahat və ya formatlama vermə.
     Verilənlər bazasının sxemi aşağıdakı kimidir:
     {db_schema}
