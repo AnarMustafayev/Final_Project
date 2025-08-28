@@ -59,3 +59,6 @@ CREATE TRIGGER update_chats_updated_at
     BEFORE UPDATE ON chats
     FOR EACH ROW
     EXECUTE FUNCTION update_updated_at_column();
+
+
+select * from chat_visualizations;

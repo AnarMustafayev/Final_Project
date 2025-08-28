@@ -105,25 +105,30 @@ const Dashboard = () => {
     }
   }, [prompt]);
 
-  // Update results when active chat changes
+  // Update results when active chat changes - FIXED to prevent infinite loop
   useEffect(() => {
     if (activeChatDetail?.messages) {
       const lastMessage = activeChatDetail.messages[activeChatDetail.messages.length - 1];
       if (lastMessage && lastMessage.visualizations?.length > 0) {
-        // Reconstruct results from last message
         const lastViz = lastMessage.visualizations[0];
-        const reconstructedResults = {
-          generated_sql: lastMessage.generated_sql,
-          data: lastViz.data_json,
-          visualization_type: lastViz.visualization_type,
-          visualization_config: lastViz.chart_config,
-          statistics: analyzeAndProcessData({
+        try {
+          const reconstructedResults = {
+            generated_sql: lastMessage.generated_sql,
             data: lastViz.data_json,
-            generated_sql: lastMessage.generated_sql
-          }).statistics
-        };
-        setResults(reconstructedResults);
-        setCurrentQuery(lastMessage.message_text);
+            visualization_type: lastViz.visualization_type,
+            visualization_config: lastViz.chart_config,
+            statistics: analyzeAndProcessData({
+              data: lastViz.data_json,
+              generated_sql: lastMessage.generated_sql
+            }).statistics
+          };
+          setResults(reconstructedResults);
+          setCurrentQuery(lastMessage.message_text);
+        } catch (error) {
+          console.error('Error reconstructing results:', error);
+          setResults(null);
+          setCurrentQuery('');
+        }
       } else {
         setResults(null);
         setCurrentQuery('');
@@ -132,7 +137,7 @@ const Dashboard = () => {
       setResults(null);
       setCurrentQuery('');
     }
-  }, [activeChatDetail, analyzeAndProcessData]);
+  }, [activeChatDetail]); // Removed analyzeAndProcessData dependency
 
   // Fetch available tables from API
   const fetchAvailableTables = async () => {
@@ -214,7 +219,7 @@ const Dashboard = () => {
   };
 
   // Determine if we should show welcome section
-  const shouldShowWelcome = !hasMessages() && !results && !loading && !currentQuery;
+  const shouldShowWelcome = !hasMessages?.() && !results && !loading && !currentQuery;
   
   // Get current error (prioritize local error over chat error)
   const currentError = error || chatError;
@@ -269,71 +274,87 @@ const Dashboard = () => {
                     </div>
                   )}
 
-                  {/* Current Query Display */}
-                  {currentQuery && (
-                    <div className="bg-blue-50 border border-blue-200 rounded-xl p-4">
-                      <div className="flex items-start gap-3">
-                        <div className="bg-blue-600 rounded-full p-2 flex-shrink-0">
-                          <User className="h-4 w-4 text-white" />
-                        </div>
-                        <div className="flex-1">
-                          <p className="text-blue-900 font-medium mb-1">
-                            {activeChat ? 'Son sorğunuz:' : 'Sizin sorğunuz:'}
-                          </p>
-                          <p className="text-blue-800">{currentQuery}</p>
-                        </div>
-                      </div>
-                    </div>
-                  )}
-
-                  {/* Chat Messages History */}
-                  {activeChatDetail?.messages && activeChatDetail.messages.length > 1 && (
-                    <div className="space-y-4">
-                      <h3 className="text-lg font-semibold text-gray-800">Chat Tarixçəsi:</h3>
-                      {activeChatDetail.messages.slice(0, -1).map((message, index) => (
-                        <div key={message.message_id} className="bg-gray-50 border rounded-xl p-4">
-                          <div className="flex items-start gap-3 mb-3">
-                            <div className="bg-gray-600 rounded-full p-2 flex-shrink-0">
+                  {/* Chat Messages History - Show ALL messages in chronological order */}
+                  {activeChatDetail?.messages && activeChatDetail.messages.length > 0 && (
+                    <div className="space-y-6">
+                      <h3 className="text-lg font-semibold text-gray-800">Chat Mesajları:</h3>
+                      
+                      {activeChatDetail.messages.map((message, index) => (
+                        <div key={message.message_id} className="bg-white border rounded-xl p-6 shadow-sm">
+                          {/* Message Header */}
+                          <div className="flex items-start gap-3 mb-4">
+                            <div className="bg-blue-600 rounded-full p-2 flex-shrink-0">
                               <User className="h-4 w-4 text-white" />
                             </div>
                             <div className="flex-1">
-                              <p className="text-gray-700">{message.message_text}</p>
-                              <p className="text-xs text-gray-500 mt-1">
-                                {new Date(message.created_at).toLocaleString('az-AZ')}
-                              </p>
+                              <div className="flex items-center justify-between">
+                                <p className="text-blue-900 font-medium">
+                                  Mesaj {index + 1}:
+                                </p>
+                                <span className="text-xs text-gray-500">
+                                  {new Date(message.created_at).toLocaleString('az-AZ')}
+                                </span>
+                              </div>
+                              <p className="text-gray-800 mt-1">{message.message_text}</p>
                             </div>
                           </div>
                           
+                          {/* SQL Query Display */}
                           {message.generated_sql && (
-                            <SqlQueryDisplay sql={message.generated_sql} />
+                            <div className="mb-4">
+                              <SqlQueryDisplay sql={message.generated_sql} />
+                            </div>
                           )}
                           
+                          {/* Visualizations */}
                           {message.visualizations?.length > 0 && (
-                            <div className="mt-4">
-                              {/* Here you could render the saved visualization */}
-                              <p className="text-sm text-gray-600">
-                                Vizualizasiya: {message.visualizations[0].visualization_type}
-                              </p>
+                            <div className="space-y-4">
+                              {message.visualizations.map((viz, vizIndex) => {
+                                let reconstructedResults;
+                                try {
+                                  reconstructedResults = {
+                                    generated_sql: message.generated_sql,
+                                    data: viz.data_json,
+                                    visualization_type: viz.visualization_type,
+                                    visualization_config: viz.chart_config,
+                                    statistics: analyzeAndProcessData({
+                                      data: viz.data_json,
+                                      generated_sql: message.generated_sql
+                                    }).statistics
+                                  };
+                                } catch (error) {
+                                  console.error('Error reconstructing visualization:', error);
+                                  return (
+                                    <div key={vizIndex} className="text-red-500 text-sm">
+                                      Vizualizasiya yüklənmədi: {viz.visualization_type}
+                                    </div>
+                                  );
+                                }
+                                
+                                return (
+                                  <div key={vizIndex}>
+                                    {/* Visualization Header */}
+                                    <div className="flex items-center gap-2 mb-3">
+                                      <BarChart3 className="h-4 w-4 text-green-600" />
+                                      <span className="text-sm font-medium text-gray-700">
+                                        Vizualizasiya: {viz.visualization_type}
+                                      </span>
+                                    </div>
+                                    
+                                    {/* Statistics Cards for this visualization */}
+                                    <StatisticsCards statistics={reconstructedResults.statistics} />
+                                    
+                                    {/* Render the actual visualization */}
+                                    <VisualizationRenderer results={reconstructedResults} />
+                                  </div>
+                                );
+                              })}
                             </div>
                           )}
                         </div>
                       ))}
                     </div>
                   )}
-
-                  {/* Current Results */}
-                  {results && !loading && !chatLoading ? (
-                    <>
-                      {/* SQL Query Display */}
-                      <SqlQueryDisplay sql={results.generated_sql} />
-
-                      {/* Statistics Cards */}
-                      <StatisticsCards statistics={results.statistics} />
-
-                      {/* Main Visualization */}
-                      <VisualizationRenderer results={results} />
-                    </>
-                  ) : null}
                 </div>
               )}
             </div>
